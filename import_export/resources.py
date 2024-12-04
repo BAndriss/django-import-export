@@ -524,7 +524,7 @@ class Resource(metaclass=DeclarativeMetaclass):
         """
         return False
 
-    def check_fields_for_skip(self,instance, original, row, field):
+    def skip_row_check_fields(self,instance, original, row, field):
         """
         Returns ``True`` if ``row`` importing should be skipped, based on the field.
         
@@ -614,7 +614,7 @@ class Resource(metaclass=DeclarativeMetaclass):
         ):
             return False
         for field in self.get_import_fields():
-            if not self.check_fields_for_skip(instance, original, row, field):
+            if not self.skip_row_check_fields(instance, original, row, field):
                 return False
         return True
 
