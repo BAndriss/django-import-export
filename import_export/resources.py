@@ -19,6 +19,7 @@ from django.db.transaction import TransactionManagementError, set_rollback
 from django.utils.encoding import force_str
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
+from django.utils import timezone
 
 from . import exceptions, widgets
 from .declarative import DeclarativeMetaclass, ModelDeclarativeMetaclass
@@ -523,6 +524,50 @@ class Resource(metaclass=DeclarativeMetaclass):
         """
         return False
 
+    def check_fields_for_skip(self,instance, original, row, field):
+        """
+        Returns ``True`` if ``row`` importing should be skipped, based on the field.
+        
+        :param instance: A new or existing model instance.
+
+        :param original: The original persisted model instance.
+
+        :param row: A ``dict`` containing key / value data for the row to be imported.
+
+        :param field: A :class:`import_export.fields.Field` instance.
+
+        """
+        # For fields that are models.fields.related.ManyRelatedManager
+        # we need to compare the results
+        if isinstance(field.widget, widgets.ManyToManyWidget):
+            # #1437 - handle m2m field not present in import file
+            if field.column_name not in row.keys():
+                return True
+            # m2m instance values are taken from the 'row' because they
+            # have not been written to the 'instance' at this point
+            instance_values = list(field.clean(row))
+            original_values = (
+                [] if original.pk is None else list(field.get_value(original).all())
+            )
+            if len(instance_values) != len(original_values):
+                return False
+
+            if sorted(v.pk for v in instance_values) != sorted(
+                v.pk for v in original_values
+            ):
+                return False
+        elif isinstance(field.widget, widgets.DateTimeWidget):
+            # Make sure the comparison is done in the same timezone
+            # Otherwise `instance_value` may look something like 19:00+01 while
+            # `original_value` is 20:00+00, which represent the same moment in time,
+            # but when compared as strings are visually different.
+            if timezone.localtime(field.get_value(instance)) != timezone.localtime(field.get_value(original)):
+                return False 
+        else:
+            if field.get_value(instance) != field.get_value(original):
+                return False
+        return True
+    
     def skip_row(self, instance, original, row, import_validation_errors=None):
         """
         Returns ``True`` if ``row`` importing should be skipped.
@@ -569,28 +614,8 @@ class Resource(metaclass=DeclarativeMetaclass):
         ):
             return False
         for field in self.get_import_fields():
-            # For fields that are models.fields.related.ManyRelatedManager
-            # we need to compare the results
-            if isinstance(field.widget, widgets.ManyToManyWidget):
-                # #1437 - handle m2m field not present in import file
-                if field.column_name not in row.keys():
-                    continue
-                # m2m instance values are taken from the 'row' because they
-                # have not been written to the 'instance' at this point
-                instance_values = list(field.clean(row))
-                original_values = (
-                    [] if original.pk is None else list(field.get_value(original).all())
-                )
-                if len(instance_values) != len(original_values):
-                    return False
-
-                if sorted(v.pk for v in instance_values) != sorted(
-                    v.pk for v in original_values
-                ):
-                    return False
-            else:
-                if field.get_value(instance) != field.get_value(original):
-                    return False
+            if not self.check_fields_for_skip(instance, original, row, field):
+                return False
         return True
 
     def get_diff_headers(self):
